@@ -8,4 +8,9 @@ At this point, it's not known whether SBT will offer a more intuitive API, or wi
 
 In ``build.sbt.HACKED`` we provide an example of how the difficulty can be circumvented.
 
+Documented in StackOverflow:
+
+http://stackoverflow.com/questions/33243981/how-can-i-override-tasks-run-and-runmain-in-sbt-to-use-my-own-forkopti/33244341#33244341
+
+
 -- Richard Gomes
