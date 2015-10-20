@@ -74,7 +74,7 @@ def javaRunner(mainClass: Option[String] = None,
     if (fork) 0
     else {
       def cancel() = {
-        //XXX println("Run canceled.")
+        if(log.isDefined) log.get.warn("Background process cancelled.")
         process.destroy()
         15
       }
