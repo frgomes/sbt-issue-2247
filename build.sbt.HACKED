@@ -1,0 +1,143 @@
+import sbt._
+import Keys._
+
+
+//-------------------------------------------------------------
+// This file contains a solution for the problem presented by
+// https://github.com/sbt/sbt/issues/2247
+//-------------------------------------------------------------
+
+
+lazy val buildSettings: Seq[Setting[_]] = Defaults.defaultSettings ++ runSettings
+
+lazy val runSettings: Seq[Setting[_]] =
+  Seq(
+    fork in (Compile, run) := true)
+
+
+def forkRunOptions(s: Scope): Seq[Setting[_]] =
+  Seq(
+    // see: https://github.com/sbt/sbt/issues/2247
+    // see: https://github.com/sbt/sbt/issues/2244
+    runner in run in s := {
+      val forkOptions: ForkOptions =
+        ForkOptions(
+          workingDirectory = Some((baseDirectory in ThisBuild).value),
+          bootJars         = Nil,
+          javaHome         = (javaHome       in s).value,
+          connectInput     = (connectInput   in s).value,
+          outputStrategy   = (outputStrategy in s).value,
+          runJVMOptions    = (javaOptions    in s).value,
+          envVars          = (envVars        in s).value)
+      new {
+        val fork_ = (fork in run).value
+        val config: ForkOptions = forkOptions
+      } with ScalaRun {
+        override def run(mainClass: String, classpath: Seq[File], options: Seq[String], log: Logger): Option[String] =
+          javaRunner(
+            Option(mainClass), Option(classpath), options,
+            Some("java"), Option(log), fork_,
+            config.runJVMOptions, config.javaHome, config.workingDirectory, config.envVars, config.connectInput, config.outputStrategy)
+      }
+    },
+    runner  in runMain in (s) := (runner in run in (s)).value,
+    run     in (s) <<= Defaults.runTask    (fullClasspath in s, mainClass in run in s, runner in run in s),
+    runMain in (s) <<= Defaults.runMainTask(fullClasspath in s,                        runner in runMain in s)
+  )
+
+
+def javaRunner(mainClass: Option[String] = None,
+               classpath: Option[Seq[File]] = None,
+               options: Seq[String],
+               javaTool: Option[String] = None,
+               log: Option[Logger] = None,
+               fork: Boolean = false,
+               jvmOptions: Seq[String] = Nil,
+               javaHome: Option[File] = None,
+               cwd: Option[File] = None,
+               envVars: Map[String, String] = Map.empty,
+               connectInput: Boolean = false,
+               outputStrategy: Option[OutputStrategy] = Some(StdoutOutput)): Option[String] = {
+
+  def runner(app: String,
+             args: Seq[String],
+             cwd: Option[File] = None,
+             env: Map[String, String] = Map.empty): Int = {
+    import scala.collection.JavaConverters._
+
+    val cmd: Seq[String] = app +: args
+    val pb = new java.lang.ProcessBuilder(cmd.asJava)
+    if (cwd.isDefined) pb.directory(cwd.get)
+    pb.inheritIO
+    //FIXME: set environment
+    val process = pb.start()
+    if (fork) 0
+    else {
+      def cancel() = {
+        //XXX println("Run canceled.")
+        process.destroy()
+        15
+      }
+      try process.waitFor catch {
+        case e: InterruptedException => cancel()
+      }
+    }
+  }
+
+  val app: String = javaHome.fold("") { p => p.absolutePath + "/bin/" } + javaTool.getOrElse("java")
+  val jvm: Seq[String] = jvmOptions.map(p => p.toString)
+  val cp: Seq[String] =
+    classpath
+      .fold(Seq.empty[String]) { paths =>
+        Seq(
+          "-cp",
+          paths
+            .map(p => p.absolutePath)
+            .mkString(java.io.File.pathSeparator))
+      }
+  val klass = mainClass.fold(Seq.empty[String]) { name => Seq(name) }
+  val xargs: Seq[String] = jvm ++ cp ++ klass ++ options
+
+  if(log.isDefined)
+    if(fork) {
+      log.get.info(s"Forking: ${app} " + xargs.mkString(" "))
+    } else {
+      log.get.info(s"Running: ${app} " + xargs.mkString(" "))
+    }
+
+  if (cwd.isDefined) IO.createDirectory(cwd.get)
+  val exitCode = runner(app, xargs, cwd, envVars)
+  if (exitCode == 0)
+    None
+  else
+    Some("Nonzero exit code returned from " + app + ": " + exitCode)
+}
+
+
+addCommandAlias("r1",       "ModuleA/RunnerR1:run")
+addCommandAlias("r2",       "ModuleA/RunnerR2:run")
+
+
+lazy val RunnerR1 = sbt.config("RunnerR1").extend(Compile)
+lazy val RunnerR2 = sbt.config("RunnerR2").extend(Compile)
+
+
+lazy val root =
+  project
+    .in(file("."))
+    .settings(buildSettings:_*)
+    .aggregate(ModuleA)
+
+lazy val ModuleA =
+  project
+    .in(file("ModuleA"))
+    .settings(buildSettings:_*)
+    .configs(RunnerR1,RunnerR2)
+    .settings(inConfig(RunnerR1)(
+      forkRunOptions(ThisScope) ++
+        Seq(
+          mainClass :=  Option("sbt.tests.issueX.Application1"))):_*)
+    .settings(inConfig(RunnerR2)(
+      forkRunOptions(ThisScope) ++
+        Seq(
+          mainClass :=  Option("sbt.tests.issueX.Application2"))):_*)
